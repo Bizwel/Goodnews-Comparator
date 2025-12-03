@@ -1,0 +1,1137 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>Goodnews Travels GDS vs System Comparator — Final Corrected</title>
+<script src="https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js"></script>
+<style>
+  body { font-family: Inter, Arial, sans-serif; padding:18px; background:#f3f6fb; color:#111; }
+  h1{margin:0 0 10px 0}
+  .box { background:#fff; padding:14px; border-radius:8px; box-shadow:0 2px 8px rgba(0,0,0,.06); margin-bottom:14px; }
+  label{font-weight:600}
+  input[type=file]{margin-top:6px}
+  button { padding:8px 12px; border-radius:8px; border:0; background:#0d6efd; color:#fff; cursor:pointer; font-weight:600; margin-right:8px }
+  .btn-muted{background:#6c757d}
+  .download-btn{background:#198754}
+  .progress-wrap{height:12px;background:#e9ecef;border-radius:8px;margin-top:10px;overflow:hidden}
+  .progress-bar{height:100%;width:0;background:linear-gradient(90deg,#4facfe,#0d6efd);transition:width .25s}
+  .stage{font-size:13px;margin-top:8px;color:#444}
+  .minor{font-size:13px;color:#555}
+  .group-title{color:#0d6efd;font-weight:700;margin-top:18px;margin-bottom:6px}
+  table{width:100%;border-collapse:collapse;margin-top:8px}
+  th,td{padding:8px;border:1px solid #e6e9ef;text-align:left;font-size:13px}
+  th{background:#343a40;color:#fff;position:sticky;top:0}
+  .pager{margin-top:8px;display:flex;align-items:center;gap:8px}
+  .searchRow{display:flex;gap:8px;align-items:center;margin-top:8px}
+  .searchRow input[type="search"]{padding:6px 8px;border:1px solid #ccd; border-radius:6px;width:240px}
+  .small{font-size:13px;color:#666'}
+  .red{background:#ffe6e6}      /* missing in system */
+  .blue{background:#e7f0ff}     /* missing in GDS */
+  .yellow{background:#fffbe6}   /* duplicate */
+  .green{background:#e6ffef}    /* matched (toggleable) */
+  .history-list{max-height:220px;overflow:auto;border:1px solid #eee;padding:8px;border-radius:6px;margin-top:8px}
+  pre{background:#f8f9fb;padding:10px;border-radius:6px;overflow:auto;white-space:pre-wrap}
+</style>
+</head>
+
+<body>
+
+<!-- Normalized ticket modal -->
+<div id="normModal" style="
+    display:none; position:fixed; top:0; left:0; width:100%; height:100%;
+    background:rgba(0,0,0,0.45); padding-top:60px; z-index:9999;">
+  <div style="
+      background:#fff; margin:auto; padding:20px; border-radius:8px;
+      width:80%; max-height:80%; overflow:auto;">
+    <h3>Normalized Ticket Samples</h3>
+    <pre id="normOutput"></pre>
+    <button onclick="document.getElementById('normModal').style.display='none'"
+            style="background:#6c757d;color:#fff;padding:8px 12px;border:0;border-radius:6px;">
+      Close
+    </button>
+  </div>
+</div>
+
+<!-- Difference & Issues Modal -->
+<div id="diffModal" style="
+    display:none; position:fixed; top:0; left:0; width:100%; height:100%;
+    background:rgba(0,0,0,0.45); padding-top:60px; z-index:9999;">
+  <div style="
+      background:#fff; margin:auto; padding:20px; border-radius:8px;
+      width:90%; max-height:85%; overflow:auto;">
+    <h3 id="diffTitle">Ticket Difference Report</h3>
+    <pre id="diffOutput"></pre>
+    <button onclick="document.getElementById('diffModal').style.display='none'"
+            style="background:#6c757d;color:#fff;padding:8px 12px;border:0;border-radius:6px;">
+      Close
+    </button>
+  </div>
+</div>
+
+<h1>Goodnews Travels GDS vs System Comparator — Final Corrected</h1>
+
+<div class="box">
+  <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap">
+    <div>
+      <label>System file</label><br>
+      <input id="systemFile" type="file" accept=".xlsx,.xls">
+    </div>
+    <div>
+      <label>GDS file</label><br>
+      <input id="gdsFile" type="file" accept=".xlsx,.xls">
+    </div>
+    <div style="margin-left:auto">
+      <button id="compareBtn">Compare</button>
+      <button id="diagBtn" class="btn-muted">Diagnostic (console)</button>
+      <button id="exportAuditBtn" class="download-btn">Export Full Audit</button>
+      <button id="saveHistoryBtn" class="btn-muted">Save Snapshot</button>
+      <button id="showNormBtn" class="btn-muted">Show Normalized Tickets</button>
+      <button id="showDiffBtn" class="btn-muted">Show Ticket Differences</button>
+      <button id="showIssuesBtn" class="btn-muted">Normalization Issues</button>
+    </div>
+  </div>
+
+  <div class="progress-wrap"><div id="progress" class="progress-bar"></div></div>
+  <div id="stage" class="stage">Idle</div>
+</div>
+
+<div id="summaryBox" class="box">
+  <div id="summaryArea" class="minor">No results yet.</div>
+  <div style="margin-top:10px">
+    <label><input id="toggleGreen" type="checkbox"> Highlight matched rows (green)</label>
+  </div>
+</div>
+
+<div id="resultsArea" class="box">
+  <div id="tablesContainer"></div>
+</div>
+
+<div class="box">
+  <h3>Saved history</h3>
+  <div>
+    <button id="clearHistoryBtn" class="btn-muted">Clear All</button>
+  </div>
+  <div id="historyList" class="history-list"></div>
+</div>
+
+<script>
+/* =========================
+   Utilities and constants
+   ========================= */
+
+const PROGRESS_STEPS = [
+  {pct:8, text:"Reading System file..."},
+  {pct:28, text:"Reading GDS file..."},
+  {pct:48, text:"Detecting columns & normalizing..."},
+  {pct:78, text:"Comparing tickets..."},
+  {pct:100, text:"Rendering results..."}
+];
+
+function setProgress(pct, text){
+  const bar = document.getElementById('progress');
+  if (!bar) return;
+  bar.style.width = pct + '%';
+  document.getElementById('stage').textContent = text || '';
+}
+
+/* =========================
+   Date normalization
+   ========================= */
+
+function excelSerialToISO(n) {
+    // Excel serial to ISO date, accounts for Excel epoch (1899-12-30)
+    const excelEpoch = Date.UTC(1899, 11, 30);
+    const dt = new Date(excelEpoch + Math.round(n) * 86400 * 1000);
+    if (!isNaN(dt)) return dt.toISOString().split('T')[0];
+    return '';
+}
+
+function parseTextDate(s) {
+    if (s === null || s === undefined) return '';
+    s = String(s).trim();
+    if (!s) return '';
+
+    // dd/mm/yyyy or dd-mm-yyyy
+    let m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/);
+    if (m) {
+        let day = Number(m[1]), mon = Number(m[2]) - 1, year = Number(m[3]);
+        if (year < 100) year += 2000;
+        const d = new Date(year, mon, day);
+        if (!isNaN(d)) return d.toISOString().split('T')[0];
+    }
+
+    // dd-MMM-yyyy or dd-MMM-yy (e.g., 01-APR-2025 or 01 Apr 25)
+    m = s.match(/^(\d{1,2})[ \-]([A-Za-z]{3,})[ \-](\d{2,4})$/);
+    if (m) {
+        const months = { JAN:0,FEB:1,MAR:2,APR:3,MAY:4,JUN:5,JUL:6,AUG:7,SEP:8,OCT:9,NOV:10,DEC:11 };
+        const day = Number(m[1]);
+        const monStr = m[2].substr(0,3).toUpperCase();
+        const mon = months[monStr];
+        let year = Number(m[3]);
+        if (year < 100) year += 2000;
+        if (mon !== undefined) {
+            const d = new Date(year, mon, day);
+            if (!isNaN(d)) return d.toISOString().split('T')[0];
+        }
+    }
+
+    // numeric serial as string
+    if (/^\d+$/.test(s)) {
+        const n = Number(s);
+        if (n > 30000 && n < 60000) {
+            return excelSerialToISO(n);
+        }
+    }
+
+    // fallback to Date.parse
+    const p = Date.parse(s);
+    if (!isNaN(p)) return new Date(p).toISOString().split('T')[0];
+
+    return ''; // not parseable
+}
+
+function normalizeGdsDate(val) {
+    if (val === null || val === undefined || val === '') return '';
+
+    if (val instanceof Date && !isNaN(val)) {
+        return val.toISOString().split('T')[0];
+    }
+    if (typeof val === 'number' && Number.isFinite(val)) {
+        if (val > 30000 && val < 60000) return excelSerialToISO(val);
+    }
+    // string path
+    const txt = String(val).trim();
+    if (!txt) return '';
+
+    // dd/mm/yyyy etc. or dd-MMM-yyyy
+    const parsed = parseTextDate(txt);
+    if (parsed) return parsed;
+
+    // if looks like Excel serial inside string
+    const digits = txt.replace(/[^\d]/g,'');
+    if (/^\d{5,6}$/.test(digits)) {
+        const n = Number(digits);
+        if (n > 30000 && n < 60000) return excelSerialToISO(n);
+    }
+
+    return txt; // fallback to original string so you can see it
+}
+
+/* =========================
+   Ticket normalization
+   ========================= */
+
+function normalizeTicket(raw) {
+    if (raw === undefined || raw === null) return "";
+    let s = String(raw).trim();
+
+    // scientific notation -> integer
+    if (/e/i.test(s)) {
+        const n = Number(s);
+        if (!Number.isNaN(n)) s = String(Math.round(n));
+    }
+
+    // If raw contains a 10-digit block, take the FIRST 10-digit block found
+    // e.g. "057 6002181850-851" -> first10 match will capture 6002181850
+    const first10 = s.match(/(?:\b|^)(\d{10})(?:\b|$)/);
+    if (first10) return first10[1];
+
+    // If pattern like 071-6359752457-58: sometimes main ticket is middle 10 digits
+    // Another robust approach: look for any 10-digit sequence anywhere (not necessarily first) and pick left-most 10-digit.
+    const any10 = s.match(/(\d{10})/);
+    if (any10) return any10[1];
+
+    // If there is a 13-digit with airline prefix (e.g., 0576002181850) -> take last 10
+    const digits = s.replace(/[^\d]/g, "");
+    if (digits.length >= 13) return digits.slice(-10);
+
+    // If 9 digits -> pad with leading zero
+    if (digits.length === 9) return "0" + digits;
+
+    // If exactly 10 digits after cleaning
+    if (digits.length === 10) return digits;
+
+    // fallback empty
+    return "";
+}
+
+/* =========================
+   Header & column detection
+   ========================= */
+
+function detectHeaderRow(raw) {
+  const GOOD_HEADER_KEYWORDS = [
+    "ticket","pnr","name","fare","tax",
+    "number","cur","issued","date","type","base","total","folder","invoice"
+  ];
+  for (let i = 0; i < Math.min(raw.length, 80); i++) {
+    const row = raw[i];
+    if (!Array.isArray(row)) continue;
+    const nonEmpty = row.filter(c => String(c).trim() !== "").length;
+    if (nonEmpty < 3) continue;
+    const rowText = row.join(" ").toLowerCase();
+    if (GOOD_HEADER_KEYWORDS.some(k => rowText.includes(k))) return i;
+  }
+  return -1;
+}
+
+function detectSystemHeader(raw) {
+  for (let i = 0; i < Math.min(raw.length, 40); i++) {
+    const row = raw[i].map(x => String(x).trim());
+    const hasName = row.some(v => /^[A-Za-z]+(\s+[A-Za-z]+)+/.test(v));
+    const hasTicket = row.some(v => /\d{6,12}/.test(v));
+    if (hasName && hasTicket) return { headerMissing: true, dataStart: i, headerRow: null };
+  }
+  const idx = detectHeaderRow(raw);
+  if (idx === -1) {
+    const firstNonEmpty = raw.findIndex(r => Array.isArray(r) && r.some(c => String(c).trim() !== ""));
+    return { headerMissing: false, headerRow: firstNonEmpty, dataStart: firstNonEmpty + 1 };
+  }
+  return { headerMissing: false, headerRow: idx, dataStart: idx + 1 };
+}
+
+function forcedSystemHeaders() {
+  return [
+    "Folder No","Date Of Issue","Pax Name","Ticket Number","PNR","Base Fare","Tax1 Amt","TOTAL",
+    "Customer","Booked by","Airline","GDS","Comm Amount","Folder Receipt","Folder Status","MarkUp",
+    "Invoice Date","Invoice No","Routes"
+  ];
+}
+
+function detectTicketColumnForSheet(sheetName, headers, sourceLabel){
+  const known = ["Ticket Number","Ticket No","Ticket","TICKET #","Number","No","Folder No","Ticket No.","Ticket#","TICKET NO"];
+  for(const k of known) if (headers.includes(k)) return k;
+  for(const h of headers){
+    if(!h) continue;
+    const clean = String(h).toLowerCase().replace(/\s+/g,'').replace(/[^a-z0-9]/g,'');
+    if (["ticketnumber","ticketno","ticket","number","no","ticket#","tktno","ticketno"].includes(clean)) return h;
+  }
+  // sheet-specific guesses
+  if (sheetName === "AMA") {
+    const alt = headers.find(h => String(h).toLowerCase().includes("ticket")) || headers.find(h=> String(h).toLowerCase().includes("ticket no"));
+    if (alt) return alt;
+  }
+  if (sheetName === "GAL") {
+    const alt = headers.find(h => String(h).toLowerCase().includes("number")) || headers.find(h => String(h).toLowerCase().includes("ticket"));
+    if (alt) return alt;
+  }
+  if (sheetName === "SAB") {
+    const alt = headers.find(h => String(h).toLowerCase().includes("ticket"));
+    if (alt) return alt;
+  }
+  return null;
+}
+
+/* =========================
+   Extract ticket from row
+   ========================= */
+
+function extractTicketForRow(row, sheetInfo){
+  const ticketColDetected = (sheetInfo && sheetInfo.ticketCol) || null;
+
+  // SYSTEM strong mapping
+  if (row._source === "SYSTEM") {
+    const sysKeys = Object.keys(row);
+    // try common names first
+    const tryKeys = ["Ticket Number","Ticket No","Ticket","Folder No","TicketNumber","TicketNo","No"];
+    for (const k of tryKeys) {
+      if (row.hasOwnProperty(k) && row[k] != null && String(row[k]).trim() !== "") {
+        const v = normalizeTicket(row[k]);
+        if (v) return v;
+      }
+    }
+    // fallback to detected column
+    if (ticketColDetected && row[ticketColDetected]) {
+      const v = normalizeTicket(row[ticketColDetected]);
+      if (v) return v;
+    }
+  }
+
+  // GDS strong mapping by sheet
+  if (row._source === "GDS") {
+    // sheet-specific fields
+    if (row._sheet === "AMA") {
+      if (row.hasOwnProperty("Ticket No") && row["Ticket No"]) {
+        const v = normalizeTicket(row["Ticket No"]);
+        if (v) return v;
+      }
+      if (row.hasOwnProperty("Ticket Number") && row["Ticket Number"]) {
+        const v = normalizeTicket(row["Ticket Number"]);
+        if (v) return v;
+      }
+    }
+    if (row._sheet === "GAL") {
+      if (row.hasOwnProperty("Number") && row["Number"]) {
+        const v = normalizeTicket(row["Number"]);
+        if (v) return v;
+      }
+    }
+    if (row._sheet === "SAB") {
+      if (row.hasOwnProperty("TICKET #") && row["TICKET #"]) {
+        const v = normalizeTicket(row["TICKET #"]);
+        if (v) return v;
+      }
+    }
+    // fallback to detected col
+    if (ticketColDetected && row[ticketColDetected]) {
+      const v = normalizeTicket(row[ticketColDetected]);
+      if (v) return v;
+    }
+  }
+
+  // header-name fallback scanning keys
+  for (const key of Object.keys(row)) {
+    if (key.startsWith('_')) continue;
+    const clean = key.toLowerCase().replace(/\s+/g,'');
+    if (clean.includes('ticket') || clean.includes('tkt') || clean === 'number' || clean === 'no') {
+      const v = normalizeTicket(row[key]);
+      if (v) return v;
+    }
+  }
+
+  // final fallback: scan raw values for 10-digit sequences
+  for (const key of Object.keys(row)) {
+    if (key.startsWith('_')) continue;
+    const v = normalizeTicket(row[key]);
+    if (v) return v;
+  }
+
+  return "";
+}
+
+/* =========================
+   Build ticket map
+   ========================= */
+
+function buildTicketMap(sheetMap){
+  const ticketMap = {};
+  Object.entries(sheetMap).forEach(([sheet, info])=>{
+    info.rows.forEach(r=> {
+      const t = extractTicketForRow(r, info);
+      if(!t) return;
+      if(!ticketMap[t]) ticketMap[t] = { count:0, sheets: new Set() };
+      ticketMap[t].count++;
+      ticketMap[t].sheets.add(sheet);
+    });
+  });
+  return ticketMap;
+}
+
+/* =========================
+   Read workbook by sheet
+   - also normalizes GDS dates and SYSTEM ticket columns early
+   ========================= */
+
+function readWorkbookBySheet(file, sourceLabel){
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const wb = XLSX.read(new Uint8Array(e.target.result), {type:'array'});
+        const map = {};
+        wb.SheetNames.forEach(sheetName => {
+          const raw = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], {header:1, defval:""});
+          if(!raw || !raw.length) return;
+
+          // Determine headers & dataRows
+          let headers = [];
+          let dataRows = [];
+          if (sourceLabel === "SYSTEM") {
+            const sysInfo = detectSystemHeader(raw);
+            if (sysInfo.headerMissing) {
+              headers = forcedSystemHeaders();
+              dataRows = raw.slice(sysInfo.dataStart);
+            } else {
+              const hIdx = sysInfo.headerRow;
+              if (hIdx === -1) return;
+              headers = raw[hIdx].map(h => (h === undefined ? "" : String(h).trim()));
+              dataRows = raw.slice(sysInfo.dataStart);
+            }
+          } else {
+            const hIdx = detectHeaderRow(raw);
+            if (hIdx === -1) {
+              // try first row as header fallback
+              headers = raw[0].map(h => (h === undefined ? "" : String(h).trim()));
+              dataRows = raw.slice(1);
+            } else {
+              headers = raw[hIdx].map(h=> (h===undefined? "": String(h).trim()));
+              dataRows = raw.slice(hIdx+1);
+            }
+          }
+
+          // Build rows
+          const rows = dataRows.map(r=>{
+            const obj = {};
+            headers.forEach((h,i) => {
+              let val = r[i];
+              // For GDS: normalize date-like columns immediately
+              if (sourceLabel === "GDS") {
+                const hLow = String(h||"").toLowerCase();
+                if (hLow.includes('date') || hLow.includes('issued') || hLow.includes('issue')) {
+                  val = normalizeGdsDate(val) || val;
+                }
+              }
+              obj[h || `C${i}`] = val;
+            });
+            obj._sheet = sheetName;
+            obj._source = sourceLabel;
+
+            // For SYSTEM: early normalize ticket-like columns using normalizeTicket
+            if (sourceLabel === "SYSTEM") {
+              const possibleKeys = ["Ticket Number","Ticket No","Ticket","TICKET #","TICKET NO","No","Folder No","TicketNumber","TicketNo"];
+              for (const key of possibleKeys) {
+                if (obj[key] !== undefined && obj[key] !== null && String(obj[key]).trim() !== "") {
+                  obj[key] = normalizeTicket(obj[key]);
+                }
+              }
+            }
+            return obj;
+          });
+
+          const ticketCol = detectTicketColumnForSheet(sheetName, headers, sourceLabel);
+          map[sheetName] = { headers, rows, ticketCol };
+        });
+        resolve(map);
+      } catch (err) {
+        reject(err);
+      }
+    };
+    reader.onerror = reject;
+    reader.readAsArrayBuffer(file);
+  });
+}
+
+/* =========================
+   GDS date fixer helpers (final sweep)
+   ========================= */
+
+function fixAllGdsDates(gdsMap, opts = {}) {
+  const sampleLogCount = opts.sampleLogCount || 10;
+  let fixedCount = 0;
+  const before = [];
+  const after = [];
+
+  Object.entries(gdsMap).forEach(([sheetName, info]) => {
+    const headerKeys = info.headers.map(h => (h===undefined?"":String(h).trim()));
+    let candidateKeys = new Set();
+
+    headerKeys.forEach((h, idx) => {
+      const clean = String(h||"").toLowerCase();
+      if (clean.includes("date") || clean.includes("issued") || clean.includes("issue") || clean.includes("dt")) candidateKeys.add(h);
+    });
+
+    if (candidateKeys.size === 0) {
+      for (let i=0;i< Math.min(6, headerKeys.length); i++) candidateKeys.add(headerKeys[i]);
+    }
+
+    info.rows.forEach((row, rIdx) => {
+      candidateKeys.forEach(k => {
+        if (!k) return;
+        const raw = row[k];
+        if (before.length < sampleLogCount) before.push({sheet:sheetName, row:rIdx, col:k, raw});
+        const normalized = normalizeGdsDate(raw);
+        if (normalized && normalized !== raw) {
+          row[k] = normalized;
+          fixedCount++;
+          if (after.length < sampleLogCount) after.push({sheet:sheetName, row:rIdx, col:k, before:raw, after:normalized});
+        }
+      });
+    });
+  });
+
+  console.info("fixAllGdsDates: checked, fixed:", fixedCount, {before: before.slice(0,8), after: after.slice(0,8)});
+  return { fixedCount, before, after };
+}
+
+function fixGdsDatesFinal(gdsMap) {
+  let fixed = 0;
+  Object.values(gdsMap).forEach(info => {
+      info.rows.forEach(row => {
+          Object.keys(row).forEach(col => {
+              const val = row[col];
+              if (val === "" || val === null || val === undefined) return;
+              if (val instanceof Date && !isNaN(val)) {
+                  row[col] = val.toISOString().split("T")[0];
+                  fixed++;
+                  return;
+              }
+              if (typeof val === "number" && val > 30000 && val < 60000) {
+                  row[col] = excelSerialToISO(val);
+                  fixed++;
+                  return;
+              }
+              if (typeof val === "string") {
+                  const cleaned = val.trim();
+                  const iso = parseTextDate(cleaned);
+                  if (iso) {
+                      row[col] = iso;
+                      fixed++;
+                      return;
+                  }
+                  // try if string contains numeric excel serial
+                  const digits = cleaned.replace(/[^\d]/g,'');
+                  if (/^\d{5,6}$/.test(digits)) {
+                      const n = Number(digits);
+                      if (n > 30000 && n < 60000) {
+                          row[col] = excelSerialToISO(n);
+                          fixed++;
+                          return;
+                      }
+                  }
+              }
+          });
+      });
+  });
+  console.info("fixGdsDatesFinal corrected", fixed, "values");
+}
+
+/* =========================
+   Comparison and rendering
+   ========================= */
+
+let lastAudit = null;
+
+async function runCompare(){
+  const sysFile = document.getElementById('systemFile').files[0];
+  const gdsFile = document.getElementById('gdsFile').files[0];
+  if(!sysFile || !gdsFile){ alert("Upload both files"); return; }
+
+  setProgress(PROGRESS_STEPS[0].pct, PROGRESS_STEPS[0].text);
+
+  // load system map
+  const sysMap = await readWorkbookBySheet(sysFile, "SYSTEM");
+  setProgress(PROGRESS_STEPS[1].pct, PROGRESS_STEPS[1].text);
+
+  // load gds map
+  const gdsMap = await readWorkbookBySheet(gdsFile, "GDS");
+  setProgress(PROGRESS_STEPS[2].pct, PROGRESS_STEPS[2].text);
+
+  // Fix GDS dates thoroughly
+  const fixResult = fixAllGdsDates(gdsMap, { sampleLogCount: 12 });
+  fixGdsDatesFinal(gdsMap);
+  console.info("Date fixes:", fixResult);
+
+  // Build ticket maps
+  const sysTicketMap = buildTicketMap(sysMap);
+  const gdsTicketMap = buildTicketMap(gdsMap);
+
+  const systemTicketsArray = Object.keys(sysTicketMap).sort();
+  const gdsTicketsArray = Object.keys(gdsTicketMap).sort();
+  const systemSet = new Set(systemTicketsArray);
+  const gdsSet = new Set(gdsTicketsArray);
+
+  console.log("SYSTEM TICKET COUNT:", systemTicketsArray.length);
+  console.log("GDS TICKET COUNT:", gdsTicketsArray.length);
+
+  setProgress(PROGRESS_STEPS[3].pct, PROGRESS_STEPS[3].text);
+
+  // Build results (missing & duplicates)
+  const gdsResults = {};
+  Object.entries(gdsMap).forEach(([sheet, info])=>{
+    const missingRows = [];
+    info.rows.forEach(r=>{
+      const t = extractTicketForRow(r, info);
+      if(!t) return;
+      if(!systemSet.has(t)) missingRows.push(Object.assign({}, r, {_ticket: t}));
+    });
+    const duplicates = [];
+    Object.entries(gdsTicketMap).forEach(([tk, meta])=>{
+      if(meta.count > 1 && meta.sheets.has(sheet)) duplicates.push({ ticket: tk, count: meta.count, sheets: Array.from(meta.sheets) });
+    });
+    gdsResults[sheet] = { missing: dedupeByTicket(missingRows), duplicates };
+  });
+
+  const sysResults = {};
+  Object.entries(sysMap).forEach(([sheet, info])=>{
+    const missingRows = [];
+    info.rows.forEach(r=>{
+      const t = extractTicketForRow(r, info);
+      if(!t) return;
+      if(!gdsSet.has(t)) missingRows.push(Object.assign({}, r, {_ticket: t}));
+    });
+    sysResults[sheet] = { missing: dedupeByTicket(missingRows) };
+  });
+
+  lastAudit = {
+    timestamp: new Date().toISOString(),
+    systemFileName: sysFile.name,
+    gdsFileName: gdsFile.name,
+    sysMap, gdsMap, sysResults, gdsResults,
+    sysTicketMap: mapToPlain(sysTicketMap), gdsTicketMap: mapToPlain(gdsTicketMap)
+  };
+
+  setProgress(PROGRESS_STEPS[4].pct, PROGRESS_STEPS[4].text);
+  renderDashboard(lastAudit);
+  setTimeout(()=> setProgress(0, "Done"), 300);
+}
+
+/* =========================
+   Helpers for comparison
+   ========================= */
+
+function dedupeByTicket(rows){
+  const seen = new Set(), out=[];
+  rows.forEach(r=> { if(!r._ticket || seen.has(r._ticket)) return; seen.add(r._ticket); out.push(r); });
+  return out;
+}
+function mapToPlain(m){
+  const o = {};
+  Object.entries(m).forEach(([k,v]) => o[k] = { count: v.count, sheets: Array.from(v.sheets) });
+  return o;
+}
+
+/* =========================
+   Dashboard rendering components
+   (table component with search + pagination)
+   ========================= */
+
+function createTableComponent(rows, opts){
+  const container = document.createElement('div');
+  container.style.marginBottom = '18px';
+
+  const controls = document.createElement('div');
+  controls.className = 'searchRow';
+
+  const searchInput = document.createElement('input');
+  searchInput.type = 'search';
+  searchInput.placeholder = 'Search this table...';
+  searchInput.addEventListener('input', debounce(()=> renderPage(1), 200));
+
+  const perPageSelect = document.createElement('select');
+  [25,50,100,200].forEach(n=>{ const o=document.createElement('option'); o.value=n; o.textContent=n+" / page"; perPageSelect.appendChild(o); });
+  perPageSelect.value = 25;
+  perPageSelect.addEventListener('change', ()=> renderPage(1));
+
+  const exportBtn = document.createElement('button');
+  exportBtn.className = 'download-btn';
+  exportBtn.textContent = 'Export shown';
+  exportBtn.onclick = ()=> {
+    const visible = filteredRows();
+    if(!visible.length) { alert("No rows to export."); return; }
+    exportJsonArray(visible, opts.exportName || 'export.xlsx');
+  };
+
+  controls.appendChild(searchInput);
+  controls.appendChild(perPageSelect);
+  controls.appendChild(exportBtn);
+  container.appendChild(controls);
+
+  const tableWrap = document.createElement('div'); tableWrap.style.marginTop='10px'; container.appendChild(tableWrap);
+  const pager = document.createElement('div'); pager.className = 'pager'; container.appendChild(pager);
+
+  let allRows = rows.slice();
+  let currentPage = 1;
+
+  function filteredRows(){
+    const q = String(searchInput.value || "").trim().toLowerCase();
+    if(!q) return allRows;
+    return allRows.filter(r => {
+      for(const k of Object.keys(r)){
+        if(k.startsWith('_')) continue;
+        const v = r[k];
+        if(v === undefined || v === null) continue;
+        if(String(v).toLowerCase().includes(q)) return true;
+      }
+      if(r._ticket && String(r._ticket).toLowerCase().includes(q)) return true;
+      return false;
+    });
+  }
+
+  function renderPage(page){
+    currentPage = page;
+    const per = parseInt(perPageSelect.value,10);
+    const filtered = filteredRows();
+    const total = filtered.length;
+    const pages = Math.max(1, Math.ceil(total / per));
+    if (currentPage > pages) currentPage = pages;
+
+    const columns = collectColumns(filtered);
+    tableWrap.innerHTML = "";
+    const table = document.createElement('table');
+    const thead = document.createElement('thead');
+    const thr = document.createElement('tr');
+    columns.forEach(c => { const th=document.createElement('th'); th.textContent=c; thr.appendChild(th); });
+    thead.appendChild(thr);
+    table.appendChild(thead);
+
+    const tbody = document.createElement('tbody');
+    const start = (currentPage-1)*per;
+    const pageRows = filtered.slice(start, start+per);
+    pageRows.forEach(r=>{
+      const tr = document.createElement('tr');
+      if (opts.highlight === 'red') tr.classList.add('red');
+      if (opts.highlight === 'blue') tr.classList.add('blue');
+      if (opts.highlight === 'yellow') tr.classList.add('yellow');
+      if (document.getElementById('toggleGreen').checked && !r._missingType) tr.classList.add('green');
+      columns.forEach(c=>{
+        const td = document.createElement('td');
+        // show normalized ticket separately if present
+        if (c === '_ticket') td.textContent = r._ticket !== undefined && r._ticket !== null ? r._ticket : '';
+        else td.textContent = r[c] !== undefined && r[c] !== null ? r[c] : '';
+        tr.appendChild(td);
+      });
+      tbody.appendChild(tr);
+    });
+    table.appendChild(tbody);
+    tableWrap.appendChild(table);
+
+    pager.innerHTML = '';
+    const info = document.createElement('div'); info.className='small'; info.textContent = total ? `Showing ${start+1}-${Math.min(start+pageRows.length, total)} of ${total}` : 'No rows';
+    pager.appendChild(info);
+
+    const prev = document.createElement('button'); prev.textContent='Prev'; prev.onclick = ()=> { if(currentPage>1) renderPage(currentPage-1); };
+    const next = document.createElement('button'); next.textContent='Next'; next.onclick = ()=> { if(currentPage<pages) renderPage(currentPage+1); };
+    pager.appendChild(prev);
+
+    const pageSelect = document.createElement('select');
+    for(let p=1;p<=pages;p++){ const o=document.createElement('option'); o.value=p; o.textContent='Page '+p; pageSelect.appendChild(o); }
+    pageSelect.value = currentPage;
+    pageSelect.onchange = ()=> renderPage(parseInt(pageSelect.value,10));
+    pager.appendChild(pageSelect);
+    pager.appendChild(next);
+  }
+
+  function collectColumns(rs){
+    const set = new Set();
+    rs.forEach(r => Object.keys(r).forEach(k => { if(!k.startsWith('_')) set.add(k); }));
+    const arr = Array.from(set);
+    if(arr.indexOf('_ticket') >= 0){
+      arr.splice(arr.indexOf('_ticket'),1);
+      arr.push('_ticket');
+    } else {
+      arr.push('_ticket');
+    }
+    return arr.length ? arr : ['_ticket'];
+  }
+
+  renderPage(1);
+  return container;
+}
+
+/* =========================
+   Render overall dashboard
+   ========================= */
+
+function renderDashboard(audit){
+  const summaryArea = document.getElementById('summaryArea');
+  const tablesContainer = document.getElementById('tablesContainer');
+  tablesContainer.innerHTML = "";
+
+  const totalGds = Object.values(audit.gdsResults).reduce((s, x) => s + x.missing.length, 0);
+  const totalSys = Object.values(audit.sysResults).reduce((s, x) => s + x.missing.length, 0);
+  const dupCount = Object.values(audit.gdsTicketMap).filter(x => x.count > 1).length;
+
+  summaryArea.innerHTML = `
+    <div class="minor"><b>Audit:</b> ${audit.systemFileName} vs ${audit.gdsFileName} — ${new Date(audit.timestamp).toLocaleString()}</div>
+    <div class="minor">Missing in System (total): <b>${totalGds}</b> — Missing in GDS (total): <b>${totalSys}</b> — Duplicate GDS tickets: <b>${dupCount}</b></div>
+  `;
+
+  // GDS grouped
+  const gdsHeader = document.createElement('div'); gdsHeader.className='group-title'; gdsHeader.textContent='Missing in System (by GDS sheet)'; tablesContainer.appendChild(gdsHeader);
+  Object.entries(audit.gdsResults).forEach(([sheet, res])=>{
+    const title = document.createElement('h4'); title.textContent = `${sheet} — Missing: ${res.missing.length} — Duplicates: ${res.duplicates.length}`;
+    tablesContainer.appendChild(title);
+    if(res.missing.length){
+      const comp = createTableComponent(res.missing, {highlight:'red', exportName:`missing_${sheet}.xlsx`});
+      tablesContainer.appendChild(comp);
+    } else {
+      const ok = document.createElement('div'); ok.className='minor'; ok.textContent='✔ No missing tickets'; tablesContainer.appendChild(ok);
+    }
+    if(res.duplicates.length){
+      const dupTitle = document.createElement('div'); dupTitle.className='minor'; dupTitle.textContent='Duplicates (ticket → sheets/count)';
+      tablesContainer.appendChild(dupTitle);
+      const dupTable = document.createElement('table');
+      const thead = document.createElement('thead'); const tr = document.createElement('tr');
+      ['Ticket','Count','Sheets'].forEach(h=>{ const th=document.createElement('th'); th.textContent=h; tr.appendChild(th); });
+      thead.appendChild(tr); dupTable.appendChild(thead);
+      const tbody = document.createElement('tbody');
+      res.duplicates.forEach(d=>{
+        const tr2 = document.createElement('tr');
+        tr2.innerHTML = `<td>${d.ticket}</td><td>${d.count}</td><td>${d.sheets.join(', ')}</td>`;
+        tbody.appendChild(tr2);
+      });
+      dupTable.appendChild(tbody);
+      tablesContainer.appendChild(dupTable);
+      const btn = document.createElement('button'); btn.className='download-btn'; btn.textContent=`Export ${sheet} duplicates`;
+      btn.onclick = ()=> exportJsonArray(res.duplicates.map(x=>({ticket:x.ticket,count:x.count,sheets:x.sheets.join(', ')})), `duplicates_${sheet}.xlsx`);
+      tablesContainer.appendChild(btn);
+    }
+  });
+
+  // System grouped
+  const sysHeader = document.createElement('div'); sysHeader.className='group-title'; sysHeader.textContent='Missing in GDS (by System sheet)'; tablesContainer.appendChild(sysHeader);
+  Object.entries(audit.sysResults).forEach(([sheet, res])=>{
+    const title = document.createElement('h4'); title.textContent = `${sheet} — Missing in GDS: ${res.missing.length}`;
+    tablesContainer.appendChild(title);
+    if(res.missing.length){
+      const comp = createTableComponent(res.missing, {highlight:'blue', exportName:`sys_missing_${sheet}.xlsx`});
+      tablesContainer.appendChild(comp);
+    } else {
+      const ok = document.createElement('div'); ok.className='minor'; ok.textContent='✔ No missing tickets in this sheet'; tablesContainer.appendChild(ok);
+    }
+  });
+
+  const exportAllBtn = document.createElement('button'); exportAllBtn.className='download-btn'; exportAllBtn.textContent='Export Audit (multi-sheet)';
+  exportAllBtn.onclick = ()=> exportFullAudit(audit);
+  tablesContainer.appendChild(exportAllBtn);
+
+  window._lastAuditForHistory = audit;
+}
+
+/* =========================
+   Export helpers, history etc.
+   ========================= */
+
+function exportFullAudit(audit){
+  const wb = XLSX.utils.book_new();
+  const summary = [
+    { key: 'systemFile', value: audit.systemFileName },
+    { key: 'gdsFile', value: audit.gdsFileName },
+    { key: 'timestamp', value: audit.timestamp },
+  ];
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(summary), 'Summary');
+
+  Object.entries(audit.gdsResults).forEach(([sheet, res])=>{
+    if(res.missing.length) XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(res.missing), `GDS-missing-${sheet}`);
+  });
+
+  Object.entries(audit.sysResults).forEach(([sheet, res])=>{
+    if(res.missing.length) XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(res.missing), `SYS-missing-${sheet}`);
+  });
+
+  const dupRows = [];
+  Object.entries(audit.gdsResults).forEach(([sheet, res])=>{
+    res.duplicates.forEach(d => dupRows.push({ ticket: d.ticket, count: d.count, sheets: d.sheets.join(', '), sourceSheet: sheet }));
+  });
+  if(dupRows.length) XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(dupRows), 'GDS-Duplicates');
+
+  const fname = `audit_${(new Date()).toISOString().replace(/[:.]/g,'_')}.xlsx`;
+  XLSX.writeFile(wb, fname);
+}
+
+function saveHistorySnapshot(){
+  const payload = window._lastAuditForHistory;
+  if(!payload){ alert("Run a comparison first."); return; }
+  const store = JSON.parse(localStorage.getItem('gds_history_v1') || '[]');
+  const meta = {
+    id: Date.now(),
+    timestamp: payload.timestamp,
+    systemFileName: payload.systemFileName,
+    gdsFileName: payload.gdsFileName,
+    summary: {
+      totalGdsMissing: Object.values(payload.gdsResults).reduce((s,x)=>s+x.missing.length,0),
+      totalSysMissing: Object.values(payload.sysResults).reduce((s,x)=>s+x.missing.length,0)
+    },
+    payload
+  };
+  store.unshift(meta);
+  localStorage.setItem('gds_history_v1', JSON.stringify(store.slice(0,20)));
+  renderHistoryList();
+  alert('Snapshot saved');
+}
+
+function loadHistory(id){
+  const store = JSON.parse(localStorage.getItem('gds_history_v1') || '[]');
+  const item = store.find(s=>s.id===id);
+  if(!item) { alert('Snapshot not found'); return; }
+  renderDashboard(item.payload);
+}
+
+function clearHistory(){
+  if(!confirm('Clear all saved snapshots?')) return;
+  localStorage.removeItem('gds_history_v1');
+  renderHistoryList();
+}
+
+function renderHistoryList(){
+  const container = document.getElementById('historyList');
+  const store = JSON.parse(localStorage.getItem('gds_history_v1') || '[]');
+  container.innerHTML = '';
+  if(!store.length) { container.textContent = 'No snapshots saved'; return; }
+  store.forEach(s=>{
+    const div = document.createElement('div'); div.style.marginBottom='8px';
+    div.innerHTML = `<b>${s.systemFileName}</b> vs <b>${s.gdsFileName}</b> — <span class="small">${new Date(s.timestamp).toLocaleString()}</span>
+      <br><span class="small">GDS missing: ${s.summary.totalGdsMissing} • SYS missing: ${s.summary.totalSysMissing}</span>`;
+    const loadBtn = document.createElement('button'); loadBtn.textContent='Load'; loadBtn.style.marginLeft='8px';
+    loadBtn.onclick = ()=> loadHistory(s.id);
+    const delBtn = document.createElement('button'); delBtn.textContent='Delete'; delBtn.className='btn-muted'; delBtn.style.marginLeft='8px';
+    delBtn.onclick = ()=> {
+      if(!confirm('Delete this snapshot?')) return;
+      const filtered = JSON.parse(localStorage.getItem('gds_history_v1') || '[]').filter(x=>x.id!==s.id);
+      localStorage.setItem('gds_history_v1', JSON.stringify(filtered));
+      renderHistoryList();
+    };
+    div.appendChild(loadBtn); div.appendChild(delBtn);
+    container.appendChild(div);
+  });
+}
+
+/* =========================
+   Diagnostic / viewers (Normalized tickets, differences, issues)
+   ========================= */
+
+document.getElementById("showNormBtn").addEventListener("click", () => {
+    if (!lastAudit) {
+        document.getElementById("normOutput").textContent = "⚠️ Run a comparison first.";
+        document.getElementById("normModal").style.display = "block";
+        return;
+    }
+    let out = "";
+    out += "===========================\n";
+    out += " SYSTEM — Sample Tickets\n";
+    out += "===========================\n\n";
+    Object.entries(lastAudit.sysMap).forEach(([sheet, info]) => {
+        out += `\n[${sheet}]\n`;
+        info.rows.slice(0,40).forEach((row, i) => {
+            const raw = row[info.ticketCol] ?? JSON.stringify(row);
+            const norm = extractTicketForRow(row, info);
+            out += `${i+1}. RAW: ${raw}\n   NORM: ${norm}\n`;
+        });
+    });
+    out += "\n\n===========================\n";
+    out += " GDS — Sample Tickets\n";
+    out += "===========================\n\n";
+    Object.entries(lastAudit.gdsMap).forEach(([sheet, info]) => {
+        out += `\n[${sheet}]\n`;
+        info.rows.slice(0,40).forEach((row, i) => {
+            // try the detected ticketCol for raw display
+            const raw = (info.ticketCol && row[info.ticketCol]) ? row[info.ticketCol] : JSON.stringify(row);
+            const norm = extractTicketForRow(row, info);
+            out += `${i+1}. RAW: ${raw}\n   NORM: ${norm}\n`;
+        });
+    });
+    document.getElementById("normOutput").textContent = out;
+    document.getElementById("normModal").style.display = "block";
+});
+
+document.getElementById("showDiffBtn").addEventListener("click", () => {
+    if (!lastAudit) {
+        document.getElementById("diffOutput").textContent = "⚠️ Run a comparison first.";
+        document.getElementById("diffModal").style.display = "block";
+        return;
+    }
+    const sys = lastAudit.sysMap;
+    const gds = lastAudit.gdsMap;
+    let out = "";
+    out += "=============================\n";
+    out += "   TICKET DIFFERENCE REPORT\n";
+    out += "=============================\n\n";
+    const sysNorm = {};
+    const gdsNorm = {};
+    Object.entries(sys).forEach(([sheet, info])=>{
+      info.rows.forEach(r=>{
+        const raw = (info.ticketCol && r[info.ticketCol]) ? r[info.ticketCol] : '';
+        const n = extractTicketForRow(r, info);
+        if (n) { sysNorm[n] = sysNorm[n] || []; sysNorm[n].push({sheet, raw, row: r}); }
+      });
+    });
+    Object.entries(gds).forEach(([sheet, info])=>{
+      info.rows.forEach(r=>{
+        const raw = (info.ticketCol && r[info.ticketCol]) ? r[info.ticketCol] : '';
+        const n = extractTicketForRow(r, info);
+        if (n) { gdsNorm[n] = gdsNorm[n] || []; gdsNorm[n].push({sheet, raw, row: r}); }
+      });
+    });
+    const all = new Set([...Object.keys(sysNorm), ...Object.keys(gdsNorm)]);
+    all.forEach(t=>{
+      const s = sysNorm[t] || [];
+      const g = gdsNorm[t] || [];
+      // present tickets that exist in at least one side, show if difference (present on both -> matched)
+      out += `TICKET: ${t}\n`;
+      out += `  SYSTEM (${s.length}):\n`;
+      s.forEach(x => out += `    [${x.sheet}] RAW=${x.raw}\n`);
+      out += `  GDS (${g.length}):\n`;
+      g.forEach(x => out += `    [${x.sheet}] RAW=${x.raw}\n`);
+      if (s.length && g.length) out += "  STATUS: MATCH ✔\n\n"; else out += "  STATUS: MISSING on " + (s.length ? "GDS" : "SYSTEM") + "\n\n";
+    });
+    document.getElementById("diffTitle").innerText = "Ticket Difference Report";
+    document.getElementById("diffOutput").textContent = out;
+    document.getElementById("diffModal").style.display = "block";
+});
+
+document.getElementById("showIssuesBtn").addEventListener("click", () => {
+    if (!lastAudit) {
+        document.getElementById("diffOutput").textContent = "⚠️ Run a comparison first.";
+        document.getElementById("diffModal").style.display = "block";
+        return;
+    }
+    const sys = lastAudit.sysMap;
+    const gds = lastAudit.gdsMap;
+    let out = "";
+    out += "=======================================\n";
+    out += "   NORMALIZATION ANOMALY DETECTION\n";
+    out += "=======================================\n\n";
+
+    function analyze(sourceLabel, map) {
+        out += `\n\n**** ${sourceLabel} ****\n`;
+        Object.entries(map).forEach(([sheet, info]) => {
+            out += `\n[Sheet: ${sheet}]\n`;
+            info.rows.slice(0,200).forEach((r, i) => {
+                const raw = (info.ticketCol && r[info.ticketCol]) ? r[info.ticketCol] : JSON.stringify(r);
+                const norm = extractTicketForRow(r, info) || "";
+                if (!norm) {
+                    out += `#${i+1} RAW=${raw} → ❌ NORMALIZED EMPTY\n`;
+                    return;
+                }
+                if (norm.length < 10) out += `#${i+1} RAW=${raw} → ⚠️ SHORT (${norm})\n`;
+                // If normalized differs significantly from digit-only raw
+                const rawDigits = String(raw).replace(/[^\d]/g,"");
+                if (rawDigits && rawDigits.indexOf(norm) === -1 && !(rawDigits.length>10 && rawDigits.endsWith(norm))) {
+                    out += `#${i+1} RAW=${raw} → CHANGED → ${norm}\n`;
+                }
+            });
+        });
+    }
+
+    analyze("SYSTEM", sys);
+    analyze("GDS", gds);
+
+    document.getElementById("diffTitle").innerText = "Normalization Issues";
+    document.getElementById("diffOutput").textContent = out;
+    document.getElementById("diffModal").style.display = "block";
+});
+
+/* =========================
+   Misc helpers (export, debounce)
+   ========================= */
+
+function exportJsonArray(arr, filename){
+  if(!arr || !arr.length){ alert('No rows to export'); return; }
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.json_to_sheet(arr);
+  XLSX.utils.book_append_sheet(wb, ws, 'Results');
+  XLSX.writeFile(wb, filename);
+}
+
+function debounce(fn, wait=200){
+  let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn(...a), wait); };
+}
+
+/* =========================
+   Wiring buttons
+   ========================= */
+
+document.getElementById('compareBtn').addEventListener('click', ()=> runCompare());
+document.getElementById('exportAuditBtn').addEventListener('click', ()=> {
+  if(!window._lastAuditForHistory) { alert('Run comparison first'); return; }
+  exportFullAudit(window._lastAuditForHistory);
+});
+document.getElementById('saveHistoryBtn').addEventListener('click', ()=> saveHistorySnapshot());
+document.getElementById('diagBtn').addEventListener('click', async ()=>{
+  const sysFile = document.getElementById('systemFile').files[0];
+  const gdsFile = document.getElementById('gdsFile').files[0];
+  if(sysFile) { const sys = await readWorkbookBySheet(sysFile,'SYSTEM'); console.log('SYSTEM SUMMARY', sys); }
+  if(gdsFile) { const gds = await readWorkbookBySheet(gdsFile,'GDS'); console.log('GDS SUMMARY', gds); }
+  alert('Diagnostics printed to console.');
+});
+document.getElementById('clearHistoryBtn').addEventListener('click', ()=> clearHistory());
+
+/* =========================
+   Init
+   ========================= */
+
+renderHistoryList();
+
+</script>
+</body>
+</html>
